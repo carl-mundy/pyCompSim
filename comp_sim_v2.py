@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
-# For VIDEO, we have PSFs as a function of position.
-# Go through each galaxy separately and add it to the image.
+# Calculate the completeness as a function of magnitude for an astronomical image.
+#	-	Carl J. Mundy, July 2015
+# Based on scripts by Kenneth J. Duncan, Dec 2012.
 
 import os, numpy as np, glob, shutil, sys, subprocess
 from astropy.table import Table, vstack
@@ -55,7 +56,7 @@ topMaxSep		= 20 #pixels
 topSave			= 'matched_objects.fits'
 ###########################################
 # STATISTICS PARAMETERS
-statMagBins		= np.arange(17, 27.2, 0.2)
+statMagBins		= np.arange(17, 27, 0.25)
 statRMax		= 5 #pixels
 statMagMax		= 0.3 #mag
 ###########################################
