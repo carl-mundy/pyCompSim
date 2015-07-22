@@ -10,12 +10,14 @@ from astropy.io import fits
 from pyraf.iraf import noao, images
 from pyraf.iraf import artdata as art
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.ticker import MultipleLocator
 
 ###########################################
 # QUICK FLAGS
-doMocks			= True
-doSex			= True
-doCat			= True
+doMocks			= False
+doSex			= False
+doCat			= False
 doStats			= True
 ###########################################
 # INPUT IMAGE PARAMETERS
@@ -33,17 +35,18 @@ psfPref 		= 'psf_Ks_CFHTLS_*' ## PSF files are psf_Ks_CFHTLS_XXX_YYY.fits
 psfSize 		= 75/2. #pixels #radius of *file* in pixels
 ###########################################
 # SIMULATED GALAXY PROPERTIES
-numSims 		= 1
+numSims 		= 2
 gallist_out 	= 'test.txt'
 outPrefix 		= 'video_'
 ngals 			= 7000
+poisson			= False
 ###########################################
 # SIMULATED GALAXY DISTRIBUTIONS
-sersic_dist 	= 0.5*np.round(np.random.lognormal(0.4, 0.3, size=ngals)*2.) # crop the distribution before science
-axis_dist 		= np.clip(np.random.normal(0.7, 0.2, size=ngals), 0.1, 1.)
+sersic_dist 	= np.clip(0.5*np.round(np.random.lognormal(0.7, 0.6, size=ngals)*2.), 0.5, 10.) # crop the distribution before science
+axis_dist 		= np.clip(np.random.normal(0.8, 0.2, size=ngals), 0.1, 1.)
 mag_dist 		= np.clip(np.random.lognormal(3.1, 0.1, size=ngals), 17., 27.)
 pa_dist			= np.random.rand(ngals)*360.
-radii_dist 		= np.clip(np.random.lognormal(2., 0.2, size=ngals), 2.5, 500.)
+radii_dist 		= np.clip(np.random.gamma(1.5, 1.5, size=ngals)*0.723, 0.5, 1000.)
 ###########################################
 # SOURCE EXTRACTOR PARAMETERS
 sexCmd			= 'sex'
@@ -84,8 +87,8 @@ if doMocks:
 		# Generate random (x,y) co-ordinates to put the mock galaxies in
 		header = fits.getheader(inputImage, 0)
 		NAXIS1, NAXIS2 = header['NAXIS1'], header['NAXIS2']
-		ra = np.random.randint(50, NAXIS1-50, ngals)
-		dec = np.random.randint(50, NAXIS2-50, ngals)
+		ra = np.random.randint(100, NAXIS1-100, ngals)
+		dec = np.random.randint(100, NAXIS2-100, ngals)
 
 		# Create the table of random data for this run
 		simTable = Table()
@@ -126,7 +129,9 @@ if doMocks:
 			images.imcopy(input=infile, output=outfile, Stdout=1)
 
 			# If there was no spatial PSF dependence, we could run mkobject here. But bum.
-			psfImage = os.path.split(psfTable['file'][5000])
+			# Choose a random PSF file
+			psfidx = np.random.randint(0, len(psfTable)-1)
+			psfImage = os.path.split(psfTable['file'][psfidx])
 			psfFile = psfPath + psfImage[-1]
 			psfSize = psfSize # Can change this later to get it from file
 
@@ -140,7 +145,7 @@ if doMocks:
 									exptime = inputImageExp,
 									comments = False,
 									gain = inputImageGain,
-									poisson = True)
+									poisson = poisson)
 
 		# Now we want to 
 		inputfiles = '\n'.join([filename for filename in outfilelist]) + '\n'
@@ -225,22 +230,96 @@ if doStats:
 	dm = np.clip(np.diff(statMagBins)[0] / 2., 0.1, 0.5)
 	binResults = []
 	realResults = []
+	badFrac = []
 	for mag in statMagBins:
 		binMask = ((masterMatches['mag'] >= (mag-dm)) * (masterMatches['mag'] < (mag+dm)))
 		realResults.append(binMask.sum())
 		binObjs = (binMask * masterMask)
 		binResults.append(binObjs.sum())
+		bad = float(np.invert(np.isfinite(masterMatches['MAG_AUTO'][binMask])).sum())
+		badFrac.append( bad/binMask.sum(dtype=float) )
 
+	# Set up PDF for plots
+	with PdfPages('look_at_these_plots.pdf') as pdf:
+		# Plot the completeness
+		Fig, ax = plt.subplots(1,1,figsize=(6,4))
+		ax.plot(statMagBins, np.array(binResults, dtype=float)/np.array(realResults, dtype=float),
+			lw=3, color='royalblue', label='matched')
+		plt.plot(statMagBins, 1.-np.array(badFrac), '-k', alpha=0.8, lw=2, label='detections')
+		plt.legend(loc='best', fontsize=8).draw_frame(False)
+		plt.plot([10,30], [0.95, 0.95], ':k', lw=1)
+		plt.plot([10,30], [0.9, 0.9], ':k', lw=1)
+		plt.plot([10,30], [0.8, 0.8], ':k', lw=1)
+		plt.plot([10,30], [0.5, 0.5], ':k', lw=1)
+		plt.xlim(np.min(statMagBins), np.max(statMagBins))
+		plt.ylim(-0.05, 1.05)
+		plt.xlabel(r'$K_s$ magnitude (AB)')
+		plt.ylabel('completeness')
+		plt.text(18, 0.3, r'N = ' + str(numSims) + '\ndmag = '+str(statMagMax) +'\nr_max = '+str(statRMax), fontsize=10)
+		plt.text(25.5, 0.94, '95%', fontsize=7, backgroundcolor='w')
+		plt.text(25.5, 0.89, '90%', fontsize=7, backgroundcolor='w')
+		plt.text(25.5, 0.79, '80%', fontsize=7, backgroundcolor='w')
+		plt.text(25.5, 0.49, '50%', fontsize=7, backgroundcolor='w')
+		majTicks = MultipleLocator(1.)
+		minTicks = MultipleLocator(.5)
+		ax.xaxis.set_major_locator(majTicks)
+		ax.xaxis.set_minor_locator(minTicks)
+		plt.tight_layout()
+		pdf.savefig()
+		plt.close()
 
-	plt.figure(figsize=(6,4))
-	plt.plot(statMagBins, np.array(binResults, dtype=float)/np.array(realResults, dtype=float),
-		lw=3, color='royalblue')
-	plt.plot([10,30], [0.95, 0.95], ':k', lw=1)
-	plt.plot([10,30], [0.9, 0.9], ':k', lw=1)
-	plt.plot([10,30], [0.8, 0.8], ':k', lw=1)
-	plt.plot([10,30], [0.5, 0.5], ':k', lw=1)
-	plt.xlim(np.min(statMagBins), np.max(statMagBins))
-	plt.xlabel(r'$K_s$ magnitude (AB)')
-	plt.ylabel('completeness')
-	plt.tight_layout()
-	plt.show()
+		# Plot the magnitude difference
+		plt.figure(figsize=(6,4))
+		n, bins, patches = plt.hist(masterMatches['MAG_AUTO'] - masterMatches['mag'], bins=np.arange(-3., 3., 0.1), histtype='step',
+			 						lw=3, color='royalblue')
+		plt.plot([0,0],[0,n.max()], ':k', lw=1.5)
+		plt.plot([statMagMax, statMagMax], [0, n.max()], ':k', lw=1.5)
+		plt.plot([-statMagMax, -statMagMax], [0, n.max()], ':k', lw=1.5)
+		plt.xlabel('(extracted - original) magnitude')
+		plt.ylabel('counts')
+		plt.tight_layout()
+		pdf.savefig()
+		plt.close()
+
+		# Plot the magnitude difference as a function of magnitude
+		plt.figure(figsize=(6,4))
+		plt.plot(masterMatches['mag'], masterMatches['MAG_AUTO'], '.k', ms=1.3, rasterized=True, alpha=0.7)
+		plt.plot([0,30],[0,30], '-r', lw=1, alpha=0.7)
+		plt.ylim(18, 27), plt.xlim(18,27)
+		plt.ylabel('output magnitude')
+		plt.xlabel('input magnitude')
+		plt.tight_layout()
+		pdf.savefig()
+		plt.close()
+
+		# Plot the magnitude distribution in and out
+		plt.figure(figsize=(6,4))
+		plt.hist(masterMatches['mag'], bins=statMagBins, histtype='step', lw=1.5, 
+			label='input magnitudes')
+		plt.hist(masterMatches['MAG_AUTO'], bins=statMagBins, histtype='step', lw=1.5,
+			label='output magnitudes')
+		plt.hist(masterMatches['mag'][masterMask], bins=statMagBins, histtype='step', lw=1.5,
+			label='matched input mags')
+		plt.legend(loc='best', fontsize=9).draw_frame(False)
+		plt.xlabel('K-band magnitude'), plt.ylabel('counts')
+		plt.tight_layout()
+		pdf.savefig()
+		plt.close()
+
+		# Plot the separations
+		plt.figure(figsize=(6,4))
+		plt.plot(masterMatches['mag'], np.log10(masterMatches['Separation']), '.k', ms=1.3, rasterized=True, alpha=0.7)
+		# plt.ylim(0,5)
+		plt.xlabel('input magnitude'), plt.ylabel('log separation (pixels)')
+		plt.tight_layout()
+		pdf.savefig()
+		plt.close()
+
+		# Plot the separation as a function of mag difference
+		plt.figure(figsize=(6,4))
+		plt.plot((masterMatches['mag']-masterMatches['MAG_AUTO']), np.log10(masterMatches['Separation']), '.k', ms=1.3, rasterized=True, alpha=0.7)
+		plt.xlim(-2,2)
+		plt.xlabel('magnitude difference'), plt.ylabel('log separation (pixels)')
+		plt.tight_layout()
+		pdf.savefig()
+		plt.close()
